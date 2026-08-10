@@ -2,178 +2,110 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-INPUT_CSV = "data/day1_portfolio.csv"
-OUTPUT_CSV = "data/day2_scored_portfolio.csv"
-TOP_TARGETS_CSV = "data/top_refi_targets.csv"
-REPORT_PATH = "reports/day2_summary.txt"
-ROC_PLOT_PATH = "reports/day2_roc_curve.png"
+INPUT_CSV = "data/day2_scored_portfolio.csv"
+OUTPUT_RESULTS_CSV = "data/day3_strategy_results.csv"
+OUTPUT_TOP_TARGETS_CSV = "data/day3_top_expected_profit_targets.csv"
+REPORT_PATH = "reports/day3_summary.txt"
+PLOT_PATH = "reports/day3_strategy_comparison.png"
 SEED = 42
-OUTREACH_COST = 150.0
-REVENUE_RATE = 0.01   # lender earns ~1% of current balance if refi closes
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
-def create_true_refi_probability(df: pd.DataFrame) -> pd.DataFrame:
+TOP_N_VALUES = [25, 50, 100, 200, 500, 1000]
+def evaluate_strategy(sorted_df: pd.DataFrame, top_n: int) -> dict:
     """
-    Create a hidden behavioral probability for whether a borrower actually refinances.
-    This is synthetic ground truth used to train the Day 2 model.
-
-    The logic is intentionally plausible:
-    - higher monthly savings -> more likely to refi
-    - shorter break-even -> more likely
-    - lower LTV -> more likely
-    - higher FICO -> more likely
-    - delinquency -> much less likely
-    - older loans / positive rate incentive -> somewhat more likely
+    Evaluate the business value of contacting the top_n borrowers in a ranked list.
     """
-    out = df.copy()
-    savings = out["monthly_savings"].clip(lower=-500, upper=1500)
-    break_even = out["break_even_months"].replace(np.inf, 999).clip(0, 999)
-    ltv = out["ltv_current"].clip(0, 2)
-    fico = out["fico"].clip(300, 850)
-    delinquent = (out["days_delinquent"] > 0).astype(int)
-    rate_diff = out["rate_diff"].clip(-0.05, 0.05)
-    loan_age_years = (out["months_elapsed"] / 12.0).clip(0, 40)
-    score = (
-            -4.0
-            + 0.006 * savings
-            - 0.010 * break_even
-            - 1.75 * ltv
-            + 0.0045 * (fico - 680)
-            - 2.5 * delinquent
-            + 10.0 * rate_diff
-            + 0.04 * loan_age_years
-    )
-    score += 1.25 * out["econ_rational"]
-    true_prob = sigmoid(score).clip(0.001, 0.95)
-    out["true_refi_probability"] = true_prob
-    return out
-def sample_refi_outcomes(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
-    """
-    Sample actual refinance outcomes from the synthetic true probability.
-    """
-    rng = np.random.default_rng(seed)
-    out = df.copy()
-    out["did_refi"] = rng.binomial(1, out["true_refi_probability"])
-    return out
-def train_refi_model(df: pd.DataFrame):
-    """
-    Train logistic regression on simulated refinance outcomes.
-    """
-    feature_cols = [
-        "monthly_savings",
-        "ltv_current",
-        "fico",
-        "days_delinquent",
-        "months_elapsed",
-        "current_balance",
-    ]
-    model_df = df.copy()
-    model_df["break_even_months"] = model_df["break_even_months"].replace(np.inf, 999)
-    X = model_df[feature_cols]
-    y = model_df["did_refi"]
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=0.25,
-        random_state=SEED,
-        stratify=y
-    )
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    model = LogisticRegression(
-        random_state=SEED,
-        max_iter=2000,
-    )
-    model.fit(X_train_scaled, y_train)
-    y_proba_test = model.predict_proba(X_test_scaled)[:, 1]
-    y_pred_test = (y_proba_test >= 0.05).astype(int)
-    auc = roc_auc_score(y_test, y_proba_test)
-    cm = confusion_matrix(y_test, y_pred_test)
+    subset = sorted_df.head(top_n).copy()
+    total_expected_profit = subset["expected_profit"].sum()
+    avg_expected_profit = subset["expected_profit"].mean()
+    median_expected_profit = subset["expected_profit"].median()
+    positive_profit_pct = (subset["expected_profit"] > 0).mean()
+    avg_probability = subset["predicted_refi_probability"].mean()
+    avg_monthly_savings = subset["monthly_savings"].mean()
+    avg_balance = subset["current_balance"].mean()
     return {
-        "model": model,
-        "scaler": scaler,
-        "feature_cols": feature_cols,
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test,
-        "y_proba_test": y_proba_test,
-        "y_pred_test": y_pred_test,
-        "auc": auc,
-        "confusion_matrix": cm,
+        "top_n": top_n,
+        "total_expected_profit": total_expected_profit,
+        "avg_expected_profit": avg_expected_profit,
+        "median_expected_profit": median_expected_profit,
+        "positive_profit_pct": positive_profit_pct,
+        "avg_predicted_refi_probability": avg_probability,
+        "avg_monthly_savings": avg_monthly_savings,
+        "avg_current_balance": avg_balance,
     }
-def score_portfolio(df: pd.DataFrame, model_info: dict) -> pd.DataFrame:
+def run_strategy_comparison(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Predict refinance propensity for all loans and compute expected lender profit.
+    Compare three strategies:
+    1. Random
+    2. Monthly savings heuristic
+    3. Expected profit ranking
     """
-    out = df.copy()
-    X_all = out[model_info["feature_cols"]].copy()
-    X_all_scaled = model_info["scaler"].transform(X_all)
-    out["predicted_refi_probability"] = model_info["model"].predict_proba(X_all_scaled)[:, 1]
-    out["expected_revenue_if_refi"] = REVENUE_RATE * out["current_balance"]
-    out["expected_profit"] = (
-            out["predicted_refi_probability"] * out["expected_revenue_if_refi"]
-            - OUTREACH_COST
+    rng = np.random.default_rng(SEED)
+    random_df = df.sample(frac=1, random_state=SEED).reset_index(drop=True)
+    savings_df = df.sort_values("monthly_savings", ascending=False).reset_index(drop=True)
+    expected_profit_df = df.sort_values("expected_profit", ascending=False).reset_index(drop=True)
+    results = []
+    for n in TOP_N_VALUES:
+        random_result = evaluate_strategy(random_df, n)
+        random_result["strategy"] = "random"
+        results.append(random_result)
+        savings_result = evaluate_strategy(savings_df, n)
+        savings_result["strategy"] = "monthly_savings"
+        results.append(savings_result)
+        expected_profit_result = evaluate_strategy(expected_profit_df, n)
+        expected_profit_result["strategy"] = "expected_profit"
+        results.append(expected_profit_result)
+    results_df = pd.DataFrame(results)
+    strategy_order = ["random", "monthly_savings", "expected_profit"]
+    results_df["strategy"] = pd.Categorical(results_df["strategy"], categories=strategy_order, ordered=True)
+    results_df = results_df.sort_values(["top_n", "strategy"]).reset_index(drop=True)
+    return results_df
+def build_summary(df: pd.DataFrame, results_df: pd.DataFrame) -> str:
+    """
+    Build a readable text summary for Day 3.
+    """
+    best_by_n = (
+        results_df.sort_values(["top_n", "total_expected_profit"], ascending=[True, False])
+        .groupby("top_n")
+        .head(1)
+        .reset_index(drop=True)
     )
-    out.loc[out["monthly_savings"] <= 0, "expected_profit"] = -OUTREACH_COST
-    return out
-def make_coefficient_table(model_info: dict) -> pd.DataFrame:
-    """
-    Return a simple coefficient table for interpretation.
-    Note: because features are standardized, coefficients are comparable in magnitude.
-    """
-    return pd.DataFrame({
-        "feature": model_info["feature_cols"],
-        "coefficient": model_info["model"].coef_[0]
-    }).sort_values("coefficient", ascending=False)
-def save_roc_plot(model_info: dict, path: str):
-    fpr, tpr, _ = roc_curve(model_info["y_test"], model_info["y_proba_test"])
-    plt.figure(figsize=(7, 5))
-    plt.plot(fpr, tpr, label=f"AUC = {model_info['auc']:.3f}")
-    plt.plot([0, 1], [0, 1], linestyle="--")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("Day 2 ROC Curve")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(path, dpi=200)
-    plt.close()
-def build_summary(scored_df: pd.DataFrame, model_info: dict, coef_df: pd.DataFrame) -> str:
-    top_10 = scored_df.sort_values("expected_profit", ascending=False).head(10)
-    positive_profit = (scored_df["expected_profit"] > 0).mean()
+    largest_n = max(TOP_N_VALUES)
+    largest_subset = results_df[results_df["top_n"] == largest_n].sort_values("total_expected_profit", ascending=False)
+    top_targets = df.sort_values("expected_profit", ascending=False).head(10)
     lines = []
-    lines.append("=== DAY 2 SUMMARY ===")
-    lines.append(f"Loans scored: {len(scored_df):,}")
+    lines.append("=== DAY 3 SUMMARY ===")
+    lines.append("Strategy comparison for refinance outreach targeting")
     lines.append("")
-    lines.append("MODEL PERFORMANCE")
-    lines.append(f"  Test AUC: {model_info['auc']:.3f}")
-    lines.append(f"  Confusion Matrix:")
-    lines.append(f"    {model_info['confusion_matrix']}")
+    lines.append("OVERVIEW")
+    lines.append(f"  Loans evaluated: {len(df):,}")
+    lines.append(f"  Outreach sizes tested: {TOP_N_VALUES}")
     lines.append("")
-    lines.append("PORTFOLIO PROPENSITY")
-    lines.append(f"  Mean predicted refinance probability: {scored_df['predicted_refi_probability'].mean():.4f}")
-    lines.append(f"  Actual simulated refinance rate: {scored_df['did_refi'].mean():.4f}")
+    lines.append("BEST STRATEGY BY OUTREACH SIZE")
+    for _, row in best_by_n.iterrows():
+        lines.append(
+            f"  Top {int(row['top_n']):>4}: {row['strategy']:<16} | "
+            f"Total Expected Profit = ${row['total_expected_profit']:,.2f} | "
+            f"Avg Profit = ${row['avg_expected_profit']:,.2f}"
+        )
     lines.append("")
-    lines.append("ECONOMICS")
-    lines.append(f"  Mean expected profit per loan: ${scored_df['expected_profit'].mean():.2f}")
-    lines.append(f"  Median expected profit per loan: ${scored_df['expected_profit'].median():.2f}")
-    lines.append(f"  % of loans with positive expected profit: {positive_profit * 100:.1f}%")
+    lines.append(f"DETAIL AT TOP {largest_n}")
+    for _, row in largest_subset.iterrows():
+        lines.append(
+            f"  {row['strategy']:<16} | "
+            f"Total Expected Profit = ${row['total_expected_profit']:,.2f} | "
+            f"Avg Profit = ${row['avg_expected_profit']:,.2f} | "
+            f"% Positive = {row['positive_profit_pct'] * 100:,.1f}%"
+        )
     lines.append("")
-    lines.append("TOP POSITIVE COEFFICIENTS")
-    for _, row in coef_df.head(5).iterrows():
-        lines.append(f"  {row['feature']}: {row['coefficient']:.4f}")
-    lines.append("")
-    lines.append("MOST NEGATIVE COEFFICIENTS")
-    for _, row in coef_df.tail(5).iterrows():
-        lines.append(f"  {row['feature']}: {row['coefficient']:.4f}")
+    lines.append("INTERPRETATION")
+    lines.append(
+        "  This analysis compares naive outreach strategies against a model-driven expected value strategy. "
+        "If expected_profit dominates, it shows that combining refinance propensity with loan economics leads "
+        "to better targeting decisions than using simple heuristics like savings alone."
+    )
     lines.append("")
     lines.append("TOP 10 EXPECTED-PROFIT TARGETS")
     lines.append(
-        top_10[
+        top_targets[
             [
                 "loan_id",
                 "predicted_refi_probability",
@@ -187,27 +119,59 @@ def build_summary(scored_df: pd.DataFrame, model_info: dict, coef_df: pd.DataFra
         ].to_string(index=False)
     )
     return "\n".join(lines)
+def save_strategy_plot(results_df: pd.DataFrame, output_path: str) -> None:
+    """
+    Plot total expected profit vs outreach size for each strategy.
+    """
+    plt.figure(figsize=(9, 6))
+    for strategy in results_df["strategy"].cat.categories:
+        subset = results_df[results_df["strategy"] == strategy]
+        plt.plot(
+            subset["top_n"],
+            subset["total_expected_profit"],
+            marker="o",
+            label=strategy
+        )
+    plt.xlabel("Number of Borrowers Contacted")
+    plt.ylabel("Total Expected Profit")
+    plt.title("Day 3 Strategy Comparison")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200)
+    plt.close()
 def main():
     os.makedirs("data", exist_ok=True)
     os.makedirs("reports", exist_ok=True)
     df = pd.read_csv(INPUT_CSV)
-    df = create_true_refi_probability(df)
-    df = sample_refi_outcomes(df)
-    model_info = train_refi_model(df)
-    scored_df = score_portfolio(df, model_info)
-    coef_df = make_coefficient_table(model_info)
-    scored_df.to_csv(OUTPUT_CSV, index=False)
-    top_targets = scored_df.sort_values("expected_profit", ascending=False).head(100)
-    top_targets.to_csv(TOP_TARGETS_CSV, index=False)
-    save_roc_plot(model_info, ROC_PLOT_PATH)
-    summary = build_summary(scored_df, model_info, coef_df)
+    required_cols = [
+        "loan_id",
+        "monthly_savings",
+        "predicted_refi_probability",
+        "expected_profit",
+        "current_balance",
+        "fico",
+        "ltv_current",
+        "days_delinquent",
+    ]
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns in {INPUT_CSV}: {missing_cols}")
+    results_df = run_strategy_comparison(df)
+    results_df.to_csv(OUTPUT_RESULTS_CSV, index=False)
+    top_expected_profit_targets = df.sort_values("expected_profit", ascending=False).head(100)
+    top_expected_profit_targets.to_csv(OUTPUT_TOP_TARGETS_CSV, index=False)
+    save_strategy_plot(results_df, PLOT_PATH)
+    summary = build_summary(df, results_df)
     with open(REPORT_PATH, "w") as f:
         f.write(summary)
     print(summary)
     print("")
-    print(f"Saved: {OUTPUT_CSV}")
-    print(f"Saved: {TOP_TARGETS_CSV}")
+    print("FULL STRATEGY RESULTS TABLE")
+    print(results_df.to_string(index=False))
+    print("")
+    print(f"Saved: {OUTPUT_RESULTS_CSV}")
+    print(f"Saved: {OUTPUT_TOP_TARGETS_CSV}")
     print(f"Saved: {REPORT_PATH}")
-    print(f"Saved: {ROC_PLOT_PATH}")
+    print(f"Saved: {PLOT_PATH}")
 if __name__ == "__main__":
     main()
