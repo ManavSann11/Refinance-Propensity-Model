@@ -73,9 +73,7 @@ refinance-propensity-model/
 ├── day1_generate_portfolio.py
 ├── day2_train_model.py
 ├── day3_compare_strategies.py
-├── day4_scenario_analysis.py
-├── requirements.txt
-└── .gitignore
+|── day4_scenario_analysis.py
 
 ## How to Run
 1. Clone the repository
