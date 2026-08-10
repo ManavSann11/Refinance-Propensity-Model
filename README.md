@@ -16,7 +16,6 @@ A logistic regression model is trained to predict the probability of refinancing
 Three outreach strategies are compared:
 - **Random**: Select borrowers at random
 - **Monthly Savings Heuristic**: Select borrowers with highest monthly savings
-- **Expected Profit**: Select borrowers with the highest monthly savings
 - **Expected Profit**: Select borrowers with the highest predicted probability x expected revenue - outreach cost
 
 ### Day 4: Scenario Analysis
