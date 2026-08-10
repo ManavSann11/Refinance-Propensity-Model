@@ -2,7 +2,25 @@
 A machine learning model that predicts which mortgage borrowers are most likely to refinance and optimizes outreach targeting to maximize expected profit. 
 
 ## Problem Statement
-A mortgage lender wants to identify borrowers who are most likely to refinance and should be targeted for outreach. The challenge is to balance conversion probability against outreach cost while considering borrower economics. 
+A mortgage lender wants to identify borrowers most likely to refinance and target them for outreach. The challenge is to balance conversion probability against outreach cost while considering borrower economics. 
+
+## Project Progression
+
+## Day 1: Portfolio Generation
+The project begins by generating a synthetic portfolio of 8,000 loans with realistic borrower characteristics. The portfolio includes region distribution, origination dates, loan terms, original balances, interest rates, FICO scores, original LTV, and delinquency status. Current snapshots are added, including monthly savings, break-even periods, and economic rationality flags. 
+
+### Day 2: Predictive Modeling
+A logistic regression model is trained to predict the probability of refinancing using engineered features such as monthly savings, LTV, FICO score, delinquency status, and loan age. The model is trained on simulated behavioral outcomes and evaluated using AUC and confusion matrix metrics.
+
+### Day 3: Strategy Comparison
+Three outreach strategies are compared:
+- **Random**: Select borrowers at random
+- **Monthly Savings Heuristic**: Select borrowers with highest monthly savings
+- **Expected Profit**: Select borrowers with the highest monthly savings
+- **Expected Profit**: Select borrowers with the highest predicted probability x expected revenue - outreach cost
+
+### Day 4: Scenario Analysis
+The strategy is stress-tested across different market rate scenarios, from 4.5 percent to 7.0 percent. This analysis shows how the refinance opportunity set expands or contracts as mortgage rates move. 
 
 ## Data Generation
 This project begins by generating a synthetic portfolio of 8,000 loans with realistic borrower characteristics:
@@ -21,11 +39,11 @@ Key features are engineered to capture borrower refinance economics:
 - **Break-even period** - months to recover closing costs
 - **Current LTV** - loan balance divided by current home value
 - **FICO score** - credit quality signal
-- **Deliquency status** - risk signal
+- **Delinzquency status** - risk signal
 - **Loan age** - months since origination
 
 ## Modeling Approach
-A logistic regression model is trained to predict refinance probability using the engineered features. The model is trained on a simulated behavioral outcome that incorporates:
+A logistic regression model is trained to predict the probability of refinancing using the engineered features. The model is trained on a simulated behavioral outcome that incorporates:
 - Monthly savings
 - Break-even period
 - LTV
@@ -53,7 +71,10 @@ The expected profit strategy outperformed the others by 40%.
 ## Repository Structure
 refinance-propensity-model/
 ├── README.md
-├── refinance_model.py
+├── day1_generate_portfolio.py
+├── day2_train_model.py
+├── day3_compare_strategies.py
+├── day4_scenario_analysis.py
 ├── requirements.txt
 └── .gitignore
 
