@@ -1,21 +1,37 @@
+"""
+Refinance Propensity Model - Day 4: Scenario Analysis
+Stress-tests the refinance strategy across different market rate scenarios.
+"""
+
 import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-INPUT_CSV = "data/day1_portfolio.csv"
+
+# File paths for input and output data
+INPUT_CSV = "data/day1_portfolio.csv"               # Original portfolio from Day 1
 OUTPUT_RESULTS_CSV = "data/day4_scenario_results.csv"
 REPORT_PATH = "reports/day4_summary.txt"
 PLOT_PATH = "reports/day4_scenario_comparison.png"
+
+# Configuration
 OUTREACH_COST = 150.0
 REVENUE_RATE = 0.01
-TOP_N_VALUES = [25, 50, 100, 200, 500, 1000]
+TOP_N_VALUES = [25, 50, 100, 200, 500, 1000]  # Outreach sizes to test
+
+# Market rate scenarios to analyze
 SCENARIOS = [
-    {"name": "4.5%", "market_rate": 0.045},
-    {"name": "5.5%", "market_rate": 0.055},
-    {"name": "6.5%", "market_rate": 0.065},
-    {"name": "7.0%", "market_rate": 0.070},
+    {"name": "4.5%", "market_rate": 0.045},  # Low rate environment
+    {"name": "5.5%", "market_rate": 0.055},  # Moderate rate environment
+    {"name": "6.5%", "market_rate": 0.065},  # Current market rate
+    {"name": "7.0%", "market_rate": 0.070},  # High rate environment
 ]
+
 def monthly_payment(principal: float, annual_rate: float, term_months: int) -> float:
+    """
+    Calculate the fixed monthly payment for a loan.
+    Used to recompute payments under different rate scenarios.
+    """
     if principal <= 0:
         return 0.0
     if annual_rate <= 0:
@@ -23,19 +39,35 @@ def monthly_payment(principal: float, annual_rate: float, term_months: int) -> f
     r = annual_rate / 12.0
     n = max(int(term_months), 1)
     return (r * principal) / (1 - (1 + r) ** (-n))
+
 def sigmoid(x):
+    """Sigmoid function for logistic regression. Maps any real number to (0, 1)."""
     return 1 / (1 + np.exp(-x))
+
 def apply_rate_scenario(df: pd.DataFrame, current_market_rate: float) -> pd.DataFrame:
     """
     Starting from Day 1 portfolio, recompute refinance economics under a new market rate.
+    
+    Args:
+        df: Day 1 portfolio DataFrame
+        current_market_rate: New market rate to simulate (e.g., 0.045 for 4.5%)
+    
+    Returns:
+        DataFrame with scenario-specific refinance economics
     """
     out = df.copy()
+    
+    # Store the scenario rate for reference
     out["scenario_market_rate"] = current_market_rate
     out["rate_diff"] = out["original_rate"] - current_market_rate
+    
+    # Recompute refinance payment at new rate
     out["pmt_refi_scenario"] = [
         monthly_payment(bal, current_market_rate, int(rt if rt > 0 else 1))
         for bal, rt in zip(out["current_balance"], out["remaining_term_months"])
     ]
+    
+    # Recompute economics under new rate
     out["monthly_savings_scenario"] = out["pmt_original"] - out["pmt_refi_scenario"]
     out["closing_cost_scenario"] = 0.02 * out["current_balance"]
     out["break_even_months_scenario"] = np.where(
@@ -43,24 +75,32 @@ def apply_rate_scenario(df: pd.DataFrame, current_market_rate: float) -> pd.Data
         out["closing_cost_scenario"] / out["monthly_savings_scenario"],
         np.inf
     )
+    
+    # Flags for analysis under this scenario
     out["in_the_money_scenario"] = (
-            (out["rate_diff"] > 0) &
-            (out["monthly_savings_scenario"] > 0)
+        (out["rate_diff"] > 0) &
+        (out["monthly_savings_scenario"] > 0)
     ).astype(int)
+    
+    # Economic rationality under this scenario (same criteria as Day 1)
     out["econ_rational_scenario"] = (
-            (out["monthly_savings_scenario"] > 0) &
-            (out["break_even_months_scenario"] < out["remaining_term_months"]) &
-            (out["ltv_current"] <= 0.95) &
-            (out["fico"] >= 620) &
-            (out["days_delinquent"] == 0)
+        (out["monthly_savings_scenario"] > 0) &
+        (out["break_even_months_scenario"] < out["remaining_term_months"]) &
+        (out["ltv_current"] <= 0.95) &
+        (out["fico"] >= 620) &
+        (out["days_delinquent"] == 0)
     ).astype(int)
+    
     return out
+
 def predict_refi_probability(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Reuse the Day 2 intuition, but directly define a scenario-based refinance probability.
+    Predict refinance probability using the same logic as Day 2, but applied to scenario data.
     This keeps Day 4 focused on how rate changes alter the opportunity set.
     """
     out = df.copy()
+    
+    # Features from scenario data
     savings = out["monthly_savings_scenario"].clip(lower=-500, upper=2000)
     break_even = out["break_even_months_scenario"].replace(np.inf, 999).clip(0, 999)
     ltv = out["ltv_current"].clip(0, 2)
@@ -68,29 +108,39 @@ def predict_refi_probability(df: pd.DataFrame) -> pd.DataFrame:
     delinquent = (out["days_delinquent"] > 0).astype(int)
     rate_diff = out["rate_diff"].clip(-0.05, 0.05)
     loan_age_years = (out["months_elapsed"] / 12.0).clip(0, 40)
+    
+    # Same weights as Day 2 for consistency
     score = (
-            -4.0
-            + 0.006 * savings
-            - 0.010 * break_even
-            - 1.75 * ltv
-            + 0.0045 * (fico - 680)
-            - 2.5 * delinquent
-            + 10.0 * rate_diff
-            + 0.04 * loan_age_years
-            + 1.25 * out["econ_rational_scenario"]
+        -4.0
+        + 0.006 * savings
+        - 0.010 * break_even
+        - 1.75 * ltv
+        + 0.0045 * (fico - 680)
+        - 2.5 * delinquent
+        + 10.0 * rate_diff
+        + 0.04 * loan_age_years
+        + 1.25 * out["econ_rational_scenario"]
     )
+    
     out["predicted_refi_probability_scenario"] = sigmoid(score).clip(0.0001, 0.95)
     return out
+
 def score_expected_profit(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute expected profit for each loan under the scenario."""
     out = df.copy()
     out["expected_revenue_if_refi_scenario"] = REVENUE_RATE * out["current_balance"]
     out["expected_profit_scenario"] = (
-            out["predicted_refi_probability_scenario"] * out["expected_revenue_if_refi_scenario"]
-            - OUTREACH_COST
+        out["predicted_refi_probability_scenario"] * out["expected_revenue_if_refi_scenario"]
+        - OUTREACH_COST
     )
+    # If no monthly savings, refinance doesn't make sense
     out.loc[out["monthly_savings_scenario"] <= 0, "expected_profit_scenario"] = -OUTREACH_COST
     return out
+
 def evaluate_top_n(sorted_df: pd.DataFrame, top_n: int) -> dict:
+    """
+    Evaluate the business value of contacting the top_n borrowers for a given scenario.
+    """
     subset = sorted_df.head(top_n).copy()
     return {
         "top_n": top_n,
@@ -100,17 +150,31 @@ def evaluate_top_n(sorted_df: pd.DataFrame, top_n: int) -> dict:
         "avg_probability": subset["predicted_refi_probability_scenario"].mean(),
         "avg_monthly_savings": subset["monthly_savings_scenario"].mean(),
     }
+
 def run_single_scenario(day1_df: pd.DataFrame, scenario_name: str, market_rate: float):
+    """
+    Run the full analysis pipeline for a single market rate scenario.
+    
+    Returns:
+        tuple: (scenario_df, results_df, portfolio_summary)
+    """
+    # Apply new rate and recompute economics
     scenario_df = apply_rate_scenario(day1_df, market_rate)
     scenario_df = predict_refi_probability(scenario_df)
     scenario_df = score_expected_profit(scenario_df)
+    
+    # Rank borrowers by expected profit
     ranked_df = scenario_df.sort_values("expected_profit_scenario", ascending=False).reset_index(drop=True)
+    
+    # Evaluate at different outreach sizes
     scenario_results = []
     for n in TOP_N_VALUES:
         row = evaluate_top_n(ranked_df, n)
         row["scenario"] = scenario_name
         row["market_rate"] = market_rate
         scenario_results.append(row)
+    
+    # Portfolio-level summary
     portfolio_summary = {
         "scenario": scenario_name,
         "market_rate": market_rate,
@@ -124,12 +188,16 @@ def run_single_scenario(day1_df: pd.DataFrame, scenario_name: str, market_rate: 
         "best_top_n": None,
         "best_total_expected_profit": None,
     }
+    
     results_df = pd.DataFrame(scenario_results)
     best_row = results_df.sort_values("total_expected_profit", ascending=False).iloc[0]
     portfolio_summary["best_top_n"] = int(best_row["top_n"])
     portfolio_summary["best_total_expected_profit"] = float(best_row["total_expected_profit"])
+    
     return scenario_df, results_df, portfolio_summary
+
 def build_summary(portfolio_summaries_df: pd.DataFrame, topn_results_df: pd.DataFrame) -> str:
+    """Build a readable text summary for Day 4."""
     lines = []
     lines.append("=== DAY 4 SUMMARY ===")
     lines.append("Rate scenario analysis for refinance outreach")
@@ -168,7 +236,9 @@ def build_summary(portfolio_summaries_df: pd.DataFrame, topn_results_df: pd.Data
         "outreach less profitable."
     )
     return "\n".join(lines)
+
 def save_plot(topn_results_df: pd.DataFrame, output_path: str):
+    """Plot total expected profit vs outreach size across all rate scenarios."""
     plt.figure(figsize=(10, 6))
     for scenario in sorted(topn_results_df["scenario"].unique()):
         subset = topn_results_df[topn_results_df["scenario"] == scenario].sort_values("top_n")
@@ -185,10 +255,16 @@ def save_plot(topn_results_df: pd.DataFrame, output_path: str):
     plt.tight_layout()
     plt.savefig(output_path, dpi=200)
     plt.close()
+
 def main():
+    """Run the Day 4 scenario analysis pipeline."""
     os.makedirs("data", exist_ok=True)
     os.makedirs("reports", exist_ok=True)
+    
+    # Load original portfolio
     day1_df = pd.read_csv(INPUT_CSV)
+    
+    # Validate required columns
     required_cols = [
         "loan_id",
         "original_rate",
@@ -203,6 +279,8 @@ def main():
     missing = [c for c in required_cols if c not in day1_df.columns]
     if missing:
         raise ValueError(f"Missing required columns from Day 1 file: {missing}")
+    
+    # Run analysis for each rate scenario
     all_topn_results = []
     all_portfolio_summaries = []
     for scenario in SCENARIOS:
@@ -213,13 +291,19 @@ def main():
         )
         all_topn_results.append(results_df)
         all_portfolio_summaries.append(portfolio_summary)
+    
+    # Combine and save results
     topn_results_df = pd.concat(all_topn_results, ignore_index=True)
     portfolio_summaries_df = pd.DataFrame(all_portfolio_summaries)
+    
     topn_results_df.to_csv(OUTPUT_RESULTS_CSV, index=False)
     save_plot(topn_results_df, PLOT_PATH)
+    
     summary = build_summary(portfolio_summaries_df, topn_results_df)
     with open(REPORT_PATH, "w") as f:
         f.write(summary)
+    
+    # Print results
     print(summary)
     print("")
     print("FULL SCENARIO RESULTS")
@@ -228,5 +312,6 @@ def main():
     print(f"Saved: {OUTPUT_RESULTS_CSV}")
     print(f"Saved: {REPORT_PATH}")
     print(f"Saved: {PLOT_PATH}")
+
 if __name__ == "__main__":
     main()
