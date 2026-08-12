@@ -70,10 +70,12 @@ The expected profit strategy outperformed the others by 40%.
 ## Repository Structure
 refinance-propensity-model/
 ├── README.md
+├── requirements.txt
+├── .gitignore
 ├── day1_generate_portfolio.py
 ├── day2_train_model.py
 ├── day3_compare_strategies.py
-|── day4_scenario_analysis.py
+└── day4_scenario_analysis.py
 
 ## How to Run
 1. Clone the repository
